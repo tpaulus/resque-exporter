@@ -267,7 +267,7 @@ func (e *Exporter) redisKey(a ...string) string {
 }
 
 func init() {
-	prometheus.MustRegister(version.NewCollector("resque-exporter"))
+	prometheus.MustRegister(version.NewCollector("resque_exporter"))
 }
 
 func main() {
