@@ -205,6 +205,24 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) error {
 	}
 	ch <- prometheus.MustNewConstMetric(failedJobExecutionsDesc, prometheus.CounterValue, failedExecutions)
 
+	workers, err := e.redisClient.SMembers(e.redisKey("workers")).Result()
+	if err != nil {
+		return err
+	}
+	ch <- prometheus.MustNewConstMetric(workersDesc, prometheus.GaugeValue, float64(len(workers)))
+
+	var workingWorkers int
+	for _, worker := range workers {
+		exists, err := e.redisClient.Exists(e.redisKey("worker", worker)).Result()
+		if err != nil {
+			return err
+		}
+		if exists == 1 {
+			workingWorkers++
+		}
+	}
+	ch <- prometheus.MustNewConstMetric(workingWorkersDesc, prometheus.GaugeValue, float64(workingWorkers))
+
 	queues, err := e.redisClient.SMembers(e.redisKey("queues")).Result()
 	if err != nil {
 		return err
@@ -240,24 +258,6 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) error {
 		}
 		ch <- prometheus.MustNewConstMetric(jobsInFailedQueueDesc, prometheus.GaugeValue, float64(jobs), queue)
 	}
-
-	workers, err := e.redisClient.SMembers(e.redisKey("workers")).Result()
-	if err != nil {
-		return err
-	}
-	ch <- prometheus.MustNewConstMetric(workersDesc, prometheus.GaugeValue, float64(len(workers)))
-
-	var workingWorkers int
-	for _, worker := range workers {
-		exists, err := e.redisClient.Exists(e.redisKey("worker", worker)).Result()
-		if err != nil {
-			return err
-		}
-		if exists == 1 {
-			workingWorkers++
-		}
-	}
-	ch <- prometheus.MustNewConstMetric(workingWorkersDesc, prometheus.GaugeValue, float64(workingWorkers))
 
 	return nil
 }
