@@ -267,7 +267,16 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) error {
 			return err
 		}
 
-		processingRatioPerQueue[queue] = float64(jobs) / float64(workersPerQueue[queue])
+		// Ensure ratio is useful when number of workers is zero.
+		// For example, if there are 10 queued jobs we would want a processing ratio
+		// of 10 as opposed to one of 0. This is important when scaling to zero is
+		// required.
+		normalizedWorkersPerQueue := workersPerQueue[queue]
+		if normalizedWorkersPerQueue == 0 {
+			normalizedWorkersPerQueue = 1
+		}
+
+		processingRatioPerQueue[queue] = float64(jobs) / float64(normalizedWorkersPerQueue)
 		ch <- prometheus.MustNewConstMetric(jobsInQueueDesc, prometheus.GaugeValue, float64(jobs), queue)
 		ch <- prometheus.MustNewConstMetric(processingRatioDesc, prometheus.GaugeValue, float64(processingRatioPerQueue[queue]), queue)
 		ch <- prometheus.MustNewConstMetric(workersPerQueueDesc, prometheus.GaugeValue, float64(workersPerQueue[queue]), queue)
