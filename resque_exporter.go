@@ -90,6 +90,11 @@ var (
 		"Number of workers.",
 		nil, nil,
 	)
+	workersPerQueueDesc = prometheus.NewDesc(
+		prometheus.BuildFQName(namespace, "", "workers_per_queue"),
+		"Number of workers handling a specific queue.",
+		[]string{"queue"}, nil,
+	)
 	workingWorkersDesc = prometheus.NewDesc(
 		prometheus.BuildFQName(namespace, "", "working_workers"),
 		"Number of working workers.",
@@ -264,7 +269,8 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) error {
 
 		processingRatioPerQueue[queue] = float64(jobs) / float64(workersPerQueue[queue])
 		ch <- prometheus.MustNewConstMetric(jobsInQueueDesc, prometheus.GaugeValue, float64(jobs), queue)
-		ch <- prometheus.MustNewConstMetric(processingRatioDesc, prometheus.GaugeValue, processingRatioPerQueue[queue], queue)
+		ch <- prometheus.MustNewConstMetric(processingRatioDesc, prometheus.GaugeValue, float64(processingRatioPerQueue[queue]), queue)
+		ch <- prometheus.MustNewConstMetric(workersPerQueueDesc, prometheus.GaugeValue, float64(workersPerQueue[queue]), queue)
 	}
 
 	failedQueues, err := e.redisClient.SMembers(e.redisKey("failed_queues")).Result()
