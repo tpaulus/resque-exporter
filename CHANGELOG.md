@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1
+
+#### Changed
+
+* Support scaling to zero workers when using `resque_processing_ratio`.
+
 ## 0.2.0
 
 #### Added
