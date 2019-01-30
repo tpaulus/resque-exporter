@@ -70,6 +70,11 @@ var (
 		"Number of jobs in a queue.",
 		[]string{"queue"}, nil,
 	)
+	processingRatioDesc = prometheus.NewDesc(
+		prometheus.BuildFQName(namespace, "", "processing_ratio"),
+		"Ratio of queued jobs to workers processing those queues.",
+		[]string{"queue"}, nil,
+	)
 	scrapeDurationDesc = prometheus.NewDesc(
 		prometheus.BuildFQName(namespace, "", "scrape_duration_seconds"),
 		"Time this scrape of resque metrics took.",
@@ -210,12 +215,56 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) error {
 		return err
 	}
 
+	workers, err := e.redisClient.SMembers(e.redisKey("workers")).Result()
+	if err != nil {
+		return err
+	}
+	ch <- prometheus.MustNewConstMetric(workersDesc, prometheus.GaugeValue, float64(len(workers)))
+
+	workersPerQueue := make(map[string]int64)
+	var workingWorkers int
+	for _, worker := range workers {
+		exists, err := e.redisClient.Exists(e.redisKey("worker", worker)).Result()
+		if err != nil {
+			return err
+		}
+		if exists == 1 {
+			workingWorkers++
+		}
+
+		workerDetails := strings.Split(worker, ":")
+		workerQueuesCsv := workerDetails[len(workerDetails)-1]
+		workerQueues := strings.Split(workerQueuesCsv, ",")
+
+		// Determine if worker is handling all queues
+		allQueues := false
+		for _, queue := range workerQueues {
+			if queue == "*" {
+				allQueues = true
+				break
+			}
+		}
+
+		if allQueues {
+			workerQueues = queues
+		}
+
+		for _, queue := range workerQueues {
+			workersPerQueue[queue]++
+		}
+	}
+	ch <- prometheus.MustNewConstMetric(workingWorkersDesc, prometheus.GaugeValue, float64(workingWorkers))
+
+	processingRatioPerQueue := make(map[string]float64)
 	for _, queue := range queues {
 		jobs, err := e.redisClient.LLen(e.redisKey("queue", queue)).Result()
 		if err != nil {
 			return err
 		}
+
+		processingRatioPerQueue[queue] = float64(jobs) / float64(workersPerQueue[queue])
 		ch <- prometheus.MustNewConstMetric(jobsInQueueDesc, prometheus.GaugeValue, float64(jobs), queue)
+		ch <- prometheus.MustNewConstMetric(processingRatioDesc, prometheus.GaugeValue, processingRatioPerQueue[queue], queue)
 	}
 
 	failedQueues, err := e.redisClient.SMembers(e.redisKey("failed_queues")).Result()
@@ -240,24 +289,6 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) error {
 		}
 		ch <- prometheus.MustNewConstMetric(jobsInFailedQueueDesc, prometheus.GaugeValue, float64(jobs), queue)
 	}
-
-	workers, err := e.redisClient.SMembers(e.redisKey("workers")).Result()
-	if err != nil {
-		return err
-	}
-	ch <- prometheus.MustNewConstMetric(workersDesc, prometheus.GaugeValue, float64(len(workers)))
-
-	var workingWorkers int
-	for _, worker := range workers {
-		exists, err := e.redisClient.Exists(e.redisKey("worker", worker)).Result()
-		if err != nil {
-			return err
-		}
-		if exists == 1 {
-			workingWorkers++
-		}
-	}
-	ch <- prometheus.MustNewConstMetric(workingWorkersDesc, prometheus.GaugeValue, float64(workingWorkers))
 
 	return nil
 }

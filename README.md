@@ -48,6 +48,7 @@ You can deploy the resque exporter using the [zappi/resque-exporter](https://hub
 | resque\_job\_executions\_total | Total number of job executions. | |
 | resque\_jobs\_in\_failed\_queue | Number of jobs in a failed queue. | queue |
 | resque\_jobs\_in\_queue | Number of jobs in a queue. | queue |
+| resque\_processing\_ratio | Ratio of queued jobs to workers processing those queues. | queue |
 | resque\_scrape\_duration\_seconds | Time this scrape of resque metrics took. | |
 | resque\_scrapes\_total | Total number of scrapes. | |
 | resque\_up | Whether this scrape of resque metrics was successful. | |
