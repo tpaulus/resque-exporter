@@ -53,6 +53,7 @@ You can deploy the resque exporter using the [zappi/resque-exporter](https://hub
 | resque\_scrapes\_total | Total number of scrapes. | |
 | resque\_up | Whether this scrape of resque metrics was successful. | |
 | resque\_workers | Number of workers. | |
+| resque\_workers\_per\_queue | Number of workers handling a specific queue. | queue |
 | resque\_working\_workers | Number of working workers. | |
 
 ## Development
