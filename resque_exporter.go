@@ -204,13 +204,13 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) error {
 	}(time.Now())
 
 	executions, err := e.redisClient.Get(e.redisKey("stat:processed")).Float64()
-	if err != nil {
+	if err != nil && err != redis.Nil {
 		return err
 	}
 	ch <- prometheus.MustNewConstMetric(jobExecutionsDesc, prometheus.CounterValue, executions)
 
 	failedExecutions, err := e.redisClient.Get(e.redisKey("stat:failed")).Float64()
-	if err != nil {
+	if err != nil && err != redis.Nil {
 		return err
 	}
 	ch <- prometheus.MustNewConstMetric(failedJobExecutionsDesc, prometheus.CounterValue, failedExecutions)
