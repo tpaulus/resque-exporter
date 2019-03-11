@@ -1,0 +1,16 @@
+version: '3'
+services:
+  exporter:
+    build: .
+    command:
+      - "--web.telemetry-path=/metrics"
+      - "--redis.namespace=resque"
+      - "--redis.url=redis://redis:6379/0"
+    ports:
+     - 9447:9447
+    links:
+      - redis
+  redis:
+    image: redis:3.2.8-alpine
+    expose:
+      - 6379
