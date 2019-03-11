@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2
+
+#### Fixed
+
+* Stop missing `stat` keys from preventing other metrics from being scraped.
+
 ## 0.2.1
 
 #### Changed
