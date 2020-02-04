@@ -10,5 +10,7 @@ MAINTAINER Satoshi Matsumoto <kaorimatz@gmail.com>
 
 COPY --from=builder /resque-exporter /bin/resque-exporter
 
+USER nobody:nogroup
+
 EXPOSE 9447
 ENTRYPOINT ["/bin/resque-exporter"]
