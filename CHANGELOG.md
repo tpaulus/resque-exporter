@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+
+#### Changed
+
+* Run as user `nobody` and group `nogroup` instead of `root`.
+
 ## 0.2.2
 
 #### Fixed
