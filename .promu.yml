@@ -1,5 +1,8 @@
+---
+go:
+    version: 1.12
 repository:
-    path: github.com/Intellection/resque-exporter
+    path: github.com/jobscore/resque-exporter
 build:
     binaries:
         - name: resque-exporter
