@@ -7,7 +7,7 @@ platforms=("386" "amd64" "arm64"  "mips" "mips64" "mips64le" "mipsle" "ppc64" "p
 
 for platform in ${platforms[*]}; do
   GOOS=linux GOARCH=${platform} PREFIX=${PREFIX} make build
-  filename=resque-exporter-$(cat VERSION).${platform}.tar.gz
+  filename=resque-exporter-$(cat VERSION).linux-${platform}.tar.gz
   tar -cvzf ${PREFIX}${filename} -C ${PREFIX} resque-exporter
   # option --remove-files is not supported on macos, so we remove the file manually
   rm ${PREFIX}resque-exporter
