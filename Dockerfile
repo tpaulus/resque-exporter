@@ -1,7 +1,7 @@
 FROM quay.io/prometheus/golang-builder as builder
 
-COPY . $GOPATH/src/github.com/jobscore/resque-exporter
-WORKDIR $GOPATH/src/github.com/jobscore/resque-exporter
+COPY . $GOPATH/src/github.com/tpaulus/resque-exporter
+WORKDIR $GOPATH/src/github.com/tpaulus/resque-exporter
 RUN go get github.com/prometheus/promu
 
 RUN make PREFIX=/
