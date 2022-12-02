@@ -421,7 +421,7 @@ func main() {
 			}
 
 			// Sleep so we run at most at the pollInterval
-			time.Sleep(time.Duration(math.Min(time.Since(tick).Seconds()-*pollInterval, 0) * float64(time.Second)))
+			time.Sleep(time.Duration(math.Max(*pollInterval - time.Since(tick).Seconds(), 0) * float64(time.Second)))
 		}
 	}(exporter)
 
