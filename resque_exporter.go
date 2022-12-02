@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -52,6 +54,16 @@ var (
 		"web.telemetry-path",
 		"/metrics",
 		"Path under which to expose metrics.",
+	)
+	pollInterval = flag.Float64(
+		"poll.interval",
+		20,
+		"Maximum Interval (in Seconds) to poll Resque",
+	)
+	minPollFreshness = flag.Float64(
+		"poll.freshness",
+		60,
+		"Maximum age (in seconds) that a poll result can be and still be served on the metrics endpoint.",
 	)
 )
 
@@ -113,6 +125,18 @@ type Exporter struct {
 	redisClient    *redis.Client
 	redisNamespace string
 
+	lastPollTime   time.Time
+	scrapeDuration float64
+
+	executions        int64
+	failedExecutions  int64
+	totalWorkers      int
+	workingWorkers    int
+	jobsInQueue       map[string]int64
+	processingRatio   map[string]float64
+	workersPerQueue   map[string]int64
+	failedJobsInQueue map[string]int64
+
 	failedScrapes prometheus.Counter
 	scrapes       prometheus.Counter
 }
@@ -127,6 +151,19 @@ func NewExporter(redisURL, redisNamespace string) (*Exporter, error) {
 	return &Exporter{
 		redisClient:    redisClient,
 		redisNamespace: redisNamespace,
+
+		lastPollTime:   time.UnixMilli(0),
+		scrapeDuration: 0,
+
+		executions:        0,
+		failedExecutions:  0,
+		totalWorkers:      0,
+		workingWorkers:    0,
+		jobsInQueue:       make(map[string]int64),
+		processingRatio:   make(map[string]float64),
+		workersPerQueue:   make(map[string]int64),
+		failedJobsInQueue: make(map[string]int64),
+
 		failedScrapes: prometheus.NewCounter(prometheus.CounterOpts{
 			Namespace: namespace,
 			Name:      "failed_scrapes_total",
@@ -188,7 +225,6 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 // Collect implements prometheus.Collector.
 func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	if err := e.scrape(ch); err != nil {
-		e.failedScrapes.Inc()
 		log.Error(err)
 		ch <- prometheus.MustNewConstMetric(upDesc, prometheus.GaugeValue, 0)
 	} else {
@@ -199,27 +235,24 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	ch <- e.scrapes
 }
 
-func (e *Exporter) scrape(ch chan<- prometheus.Metric) error {
+// poll fetches new metrics from Resque
+func (e *Exporter) poll() error {
+	var err error
 	e.scrapes.Inc()
 
 	defer func(start time.Time) {
-		ch <- prometheus.MustNewConstMetric(
-			scrapeDurationDesc,
-			prometheus.GaugeValue,
-			float64(time.Since(start).Seconds()))
+		e.scrapeDuration = time.Since(start).Seconds()
 	}(time.Now())
 
-	executions, err := e.redisClient.Get(ctx, e.redisKey("stat:processed")).Float64()
+	e.executions, err = e.redisClient.Get(ctx, e.redisKey("stat:processed")).Int64()
 	if err != nil && err != redis.Nil {
 		return err
 	}
-	ch <- prometheus.MustNewConstMetric(jobExecutionsDesc, prometheus.CounterValue, executions)
 
-	failedExecutions, err := e.redisClient.Get(ctx, e.redisKey("stat:failed")).Float64()
+	e.failedExecutions, err = e.redisClient.Get(ctx, e.redisKey("stat:failed")).Int64()
 	if err != nil && err != redis.Nil {
 		return err
 	}
-	ch <- prometheus.MustNewConstMetric(failedJobExecutionsDesc, prometheus.CounterValue, failedExecutions)
 
 	queues, err := e.redisClient.SMembers(ctx, e.redisKey("queues")).Result()
 	if err != nil {
@@ -230,7 +263,7 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) error {
 	if err != nil {
 		return err
 	}
-	ch <- prometheus.MustNewConstMetric(workersDesc, prometheus.GaugeValue, float64(len(workers)))
+	e.totalWorkers = len(workers)
 
 	workersPerQueue := make(map[string]int64)
 	var workingWorkers int
@@ -264,8 +297,10 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) error {
 			workersPerQueue[queue]++
 		}
 	}
-	ch <- prometheus.MustNewConstMetric(workingWorkersDesc, prometheus.GaugeValue, float64(workingWorkers))
+	e.workersPerQueue = workersPerQueue
+	e.workingWorkers = workingWorkers
 
+	jobsPerQueue := make(map[string]int64)
 	processingRatioPerQueue := make(map[string]float64)
 	for _, queue := range queues {
 		jobs, err := e.redisClient.LLen(ctx, e.redisKey("queue", queue)).Result()
@@ -282,10 +317,10 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) error {
 		}
 
 		processingRatioPerQueue[queue] = float64(jobs) / float64(normalizedWorkersPerQueue)
-		ch <- prometheus.MustNewConstMetric(jobsInQueueDesc, prometheus.GaugeValue, float64(jobs), queue)
-		ch <- prometheus.MustNewConstMetric(processingRatioDesc, prometheus.GaugeValue, float64(processingRatioPerQueue[queue]), queue)
-		ch <- prometheus.MustNewConstMetric(workersPerQueueDesc, prometheus.GaugeValue, float64(workersPerQueue[queue]), queue)
+		jobsPerQueue[queue] = jobs
 	}
+	e.jobsInQueue = jobsPerQueue
+	e.processingRatio = processingRatioPerQueue
 
 	failedQueues, err := e.redisClient.SMembers(ctx, e.redisKey("failed_queues")).Result()
 	if err != nil {
@@ -302,11 +337,40 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) error {
 		}
 	}
 
+	failedJobsPerQueue := make(map[string]int64)
 	for _, queue := range failedQueues {
 		jobs, err := e.redisClient.LLen(ctx, e.redisKey(queue)).Result()
 		if err != nil {
 			return err
 		}
+		failedJobsPerQueue[queue] = jobs
+	}
+	e.failedJobsInQueue = failedJobsPerQueue
+
+	e.lastPollTime = time.Now()
+	return nil
+}
+
+func (e *Exporter) scrape(ch chan<- prometheus.Metric) error {
+	if time.Since(e.lastPollTime).Seconds() > *minPollFreshness {
+		return errors.New("no fresh poll data")
+	}
+
+	ch <- prometheus.MustNewConstMetric(jobExecutionsDesc, prometheus.CounterValue, float64(e.executions))
+	ch <- prometheus.MustNewConstMetric(failedJobExecutionsDesc, prometheus.CounterValue, float64(e.failedExecutions))
+	ch <- prometheus.MustNewConstMetric(workersDesc, prometheus.GaugeValue, float64(e.totalWorkers))
+	ch <- prometheus.MustNewConstMetric(workingWorkersDesc, prometheus.GaugeValue, float64(e.workingWorkers))
+
+	for queue, jobs := range e.jobsInQueue {
+		ch <- prometheus.MustNewConstMetric(jobsInQueueDesc, prometheus.GaugeValue, float64(jobs), queue)
+	}
+	for queue, ratio := range e.processingRatio {
+		ch <- prometheus.MustNewConstMetric(processingRatioDesc, prometheus.GaugeValue, ratio, queue)
+	}
+	for queue, workers := range e.workersPerQueue {
+		ch <- prometheus.MustNewConstMetric(workersPerQueueDesc, prometheus.GaugeValue, float64(workers), queue)
+	}
+	for queue, jobs := range e.failedJobsInQueue {
 		ch <- prometheus.MustNewConstMetric(jobsInFailedQueueDesc, prometheus.GaugeValue, float64(jobs), queue)
 	}
 
@@ -342,6 +406,24 @@ func main() {
 		log.Fatal(err)
 	}
 	promRegistry.MustRegister(exporter)
+
+	go func(e *Exporter) {
+		log.Infoln("Poller Started")
+
+		for {
+			tick := time.Now()
+
+			err := e.poll()
+			log.Debug("Poll Completed")
+			if err != nil {
+				e.failedScrapes.Inc()
+				log.Error(err)
+			}
+
+			// Sleep so we run at most at the pollInterval
+			time.Sleep(time.Duration(math.Min(time.Since(tick).Seconds()-*pollInterval, 0) * float64(time.Second)))
+		}
+	}(exporter)
 
 	http.Handle(*metricPath, promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{}))
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
