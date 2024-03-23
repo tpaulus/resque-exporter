@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"math"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -64,6 +65,24 @@ var (
 		"poll.freshness",
 		60,
 		"Maximum age (in seconds) that a poll result can be and still be served on the metrics endpoint.",
+	)
+
+	logLevel = flag.String(
+		"log.level",
+		"info",
+		"default log level for logrus",
+	)
+
+	cleanUpPercent = flag.Float64(
+		"worker.cleanup-percent",
+		0.0,
+		"percentage [0,1) of workers eligible for cleanup per poll interval. Set to 0 to never delete keys.",
+	)
+
+	maxWorkerAge = flag.Int(
+		"worker.max-age",
+		60,
+		"Maximum age (in days) for a worker to be considered too old and eligible for deletion.",
 	)
 )
 
@@ -267,13 +286,45 @@ func (e *Exporter) poll() error {
 
 	workersPerQueue := make(map[string]int64)
 	var workingWorkers int
+
+	r := rand.New(rand.NewSource(time.Now().UnixMilli()))
+
 	for _, worker := range workers {
-		exists, err := e.redisClient.Exists(ctx, e.redisKey("worker", worker)).Result()
+		startedAt, err := e.redisClient.Get(ctx, e.redisKey("worker", worker, "started")).Result()
 		if err != nil {
 			return err
 		}
-		if exists == 1 {
+
+		if startedAt != "" {
 			workingWorkers++
+
+			// we sample to not delay metrics collection
+			// we rely on the poll interval to eventually go through the whole set of workers
+			if r.Float64() <= *cleanUpPercent {
+				// invalid dates will be ignored
+				// php-resque uses date('c') for the value at the key prefix:worker:$id:started
+				if t, err := time.Parse(time.RFC3339, startedAt); err == nil {
+					age := int(time.Since(t).Hours() / 24)
+					if age > *maxWorkerAge {
+						// force unregister old workers
+						// https://github.com/jacobbednarz/php-resque/blob/master/lib/Resque/Worker.php#L564
+						log.Debugf("worker:%s (%d days old) will be deleted", worker, age)
+						keys := []string{
+							e.redisKey("worker", worker),
+							e.redisKey("worker", worker, "started"),
+							e.redisKey("processed", worker),
+							e.redisKey("failed", worker),
+						}
+						delCmd := e.redisClient.Del(ctx, keys...)
+						if err := delCmd.Err(); err != nil {
+							log.Errorf("failed deleting old worker keys, error: %v", err)
+						}
+					}
+				}
+			}
+		} else {
+			// remove from set of active workers
+			e.redisClient.SRem(ctx, e.redisKey("workers"), worker).Result()
 		}
 
 		workerDetails := strings.Split(worker, ":")
@@ -394,6 +445,10 @@ func main() {
 		return
 	}
 
+	if lvl, err := log.ParseLevel(*logLevel); err == nil {
+		log.SetLevel(lvl)
+	}
+
 	log.Infoln("Starting resque-exporter", version.Info())
 	log.Infoln("Build context", version.BuildContext())
 
@@ -421,7 +476,7 @@ func main() {
 			}
 
 			// Sleep so we run at most at the pollInterval
-			time.Sleep(time.Duration(math.Max(*pollInterval - time.Since(tick).Seconds(), 0) * float64(time.Second)))
+			time.Sleep(time.Duration(math.Max(*pollInterval-time.Since(tick).Seconds(), 0) * float64(time.Second)))
 		}
 	}(exporter)
 
